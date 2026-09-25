@@ -1,0 +1,87 @@
+name: 'RL Format'
+description: 'Check formatting of .rl files with rl format'
+author: 'MohamedGonem'
+
+branding:
+  icon: 'edit'
+  color: 'purple'
+
+inputs:
+  version:
+    description: 'RL version: latest, nightly, or vX.Y.Z (e.g. v2.2.0). Defaults to the latest stable release.'
+    required: false
+    default: 'latest'
+  file:
+    description: 'File to format-check (e.g. main.rl). Ignored if folder is set.'
+    required: false
+    default: ''
+  folder:
+    description: 'Folder to format-check (e.g. src/). Checks every .rl file directly inside it. Fails on the first diff.'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Working directory to run rl format in'
+    required: false
+    default: '.'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup RL
+      uses: rl-lang/rl-setup@main
+      with:
+        version: ${{ inputs.version }}
+        binaries: rl
+
+    - name: Check formatting
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        FOLDER="${{ inputs.folder }}"
+        FILE="${{ inputs.file }}"
+
+        check_one() {
+          # `rl format` is in-place: copy aside, format, diff, restore.
+          tmp=$(mktemp)
+          cp "$1" "$tmp"
+          rl format "$1" >/dev/null
+          if diff -u "$tmp" "$1"; then
+            rc=0
+          else
+            echo "::error::bad formatting: $1 (run rl format to fix)"
+            rc=1
+          fi
+          cp "$tmp" "$1"
+          rm -f "$tmp"
+          return $rc
+        }
+
+        if [ -n "$FOLDER" ]; then
+          if [ ! -d "$FOLDER" ]; then
+            echo "::error::Folder not found: $FOLDER"
+            exit 1
+          fi
+
+          FAIL=0
+          COUNT=0
+          # Unquoted glob so bash expands it; guard the no-match case.
+          for f in $FOLDER/*.rl; do
+            [ -e "$f" ] || continue
+            COUNT=$((COUNT+1))
+            echo "::group::rl format $f"
+            check_one "$f" || FAIL=1
+            echo "::endgroup::"
+          done
+
+          if [ "$COUNT" -eq 0 ]; then
+            echo "::error::No .rl files found in $FOLDER"
+            exit 1
+          fi
+
+          exit $FAIL
+        elif [ -n "$FILE" ]; then
+          check_one "$FILE"
+        else
+          echo "::error::Must set either 'file' or 'folder'"
+          exit 1
+        fi
